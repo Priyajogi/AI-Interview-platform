@@ -1,0 +1,164 @@
+/* CSS Variables for Light Mode */
+:root {
+  /* Colors */
+  --primary-color: #667eea;
+  --primary-color-rgb: 102, 126, 234;
+  --secondary-color: #764ba2;
+  --secondary-color-rgb: 118, 75, 162;
+  
+  /* Backgrounds */
+  --bg-primary: #ffffff;
+  --bg-primary-rgb: 255, 255, 255;
+  --bg-secondary: #f8f9fa;
+  --bg-secondary-rgb: 248, 249, 250;
+  
+  /* Text */
+  --text-primary: #333333;
+  --text-primary-rgb: 51, 51, 51;
+  --text-secondary: #666666;
+  --text-secondary-rgb: 102, 102, 102;
+  
+  /* Borders */
+  --border-color: #e2e8f0;
+  --border-color-rgb: 226, 232, 240;
+  
+  /* Cards */
+  --card-bg: #ffffff;
+  --card-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+  
+  /* Buttons */
+  --btn-primary-bg: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  --btn-secondary-bg: #f8f9fa;
+  
+  /* Transitions */
+  --transition-speed: 0.3s;
+}
+
+/* CSS Variables for Dark Mode */
+.dark-mode {
+  /* Colors */
+  --primary-color: #7c93fb;
+  --primary-color-rgb: 124, 147, 251;
+  --secondary-color: #9b6bff;
+  --secondary-color-rgb: 155, 107, 255;
+  
+  /* Backgrounds */
+  --bg-primary: #121212;
+  --bg-primary-rgb: 18, 18, 18;
+  --bg-secondary: #1e1e1e;
+  --bg-secondary-rgb: 30, 30, 30;
+  
+  /* Text */
+  --text-primary: #ffffff;
+  --text-primary-rgb: 255, 255, 255;
+  --text-secondary: #b0b0b0;
+  --text-secondary-rgb: 176, 176, 176;
+  
+  /* Borders */
+  --border-color: #333333;
+  --border-color-rgb: 51, 51, 51;
+  
+  /* Cards */
+  --card-bg: #1e1e1e;
+  --card-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+  
+  /* Buttons */
+  --btn-primary-bg: linear-gradient(135deg, #7c93fb 0%, #9b6bff 100%);
+  --btn-secondary-bg: #2a2a2a;
+}
+
+/* Apply theme variables globally */
+* {
+  transition: background-color var(--transition-speed) ease,
+              color var(--transition-speed) ease,
+              border-color var(--transition-speed) ease,
+              box-shadow var(--transition-speed) ease;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.App {
+  text-align: center;
+}
+
+.App-logo {
+  height: 40vmin;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .App-logo {
+    animation: App-logo-spin infinite 20s linear;
+  }
+}
+
+.App-header {
+  background-color: #282c34;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(10px + 2vmin);
+  color: white;
+}
+
+.App-link {
+  color: #61dafb;
+}
+
+@keyframes App-logo-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Ensure smooth transitions for all elements */
+*::before,
+*::after {
+  transition: inherit;
+}
+
+/* Global button styles */
+.btn-primary {
+  background: var(--btn-primary-bg) !important;
+  color: white !important;
+}
+
+.btn-secondary {
+  background: var(--btn-secondary-bg) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border-color) !important;
+}
+
+/* Global card styles */
+.card {
+  background: var(--card-bg) !important;
+  box-shadow: var(--card-shadow) !important;
+  border: 1px solid var(--border-color) !important;
+}
+
+/* Global input styles */
+input, textarea, select {
+  background: var(--bg-secondary) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border-color) !important;
+}
+
+/* Global link styles */
+a {
+  color: var(--primary-color) !important;
+}
