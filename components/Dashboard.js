@@ -42,9 +42,6 @@ const Dashboard = () => {
     tips: []
   });
 
-  // Backend API base URL - update this to your backend URL
-  const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
-
   // Memoized default data functions
   const getDefaultPerformanceData = useCallback(() => [
     { name: 'W1', score: 65, color: '#667eea' },
@@ -75,19 +72,28 @@ const Dashboard = () => {
     { id: 4, title: 'Consistency', description: 'Maintain your streak!', icon: '📈', color: '#fc8181' }
   ], []);
 
+  // Get user data from localStorage as fallback
+  const getStoredUserData = useCallback(() => {
+    try {
+      const storedUser = JSON.parse(localStorage.getItem('interviewAppUser'));
+      return {
+        name: storedUser?.name || '',
+        streak: 0
+      };
+    } catch {
+      return { name: '', streak: 0 };
+    }
+  }, []);
+
   const getDefaultData = useCallback(() => ({
-    user: { name: 'John', streak: 7 },
-    stats: { totalInterviews: 12, avgScore: 82, bestScore: 96, improvement: 15 },
+    user: getStoredUserData(),
+    stats: { totalInterviews: 0, avgScore: 0, bestScore: 0, improvement: 0 },
     performanceData: getDefaultPerformanceData(),
     pieData: getDefaultPieData(),
     categoryData: getDefaultCategoryData(),
-    recentInterviews: [
-      { id: 1, type: 'Technical', score: 85, date: 'Today', duration: '12:45' },
-      { id: 2, type: 'Behavioral', score: 92, date: 'Yesterday', duration: '15:20' },
-      { id: 3, type: 'HR', score: 78, date: 'Jan 20', duration: '08:30' }
-    ],
+    recentInterviews: [],
     tips: getDefaultTips()
-  }), [getDefaultPerformanceData, getDefaultPieData, getDefaultCategoryData, getDefaultTips]);
+  }), [getDefaultPerformanceData, getDefaultPieData, getDefaultCategoryData, getDefaultTips, getStoredUserData]);
 
   // Fetch dashboard data from backend
   const fetchDashboardData = useCallback(async () => {
@@ -95,24 +101,23 @@ const Dashboard = () => {
       setLoading(true);
       setError(null);
       
-      // Get token from localStorage
-      const token = localStorage.getItem('token');
+      // Try to get user data from localStorage as fallback
+      const storedUser = getStoredUserData();
       
-      // Make API call to backend - FIXED: Added proper API_BASE_URL
-      const response = await axiosInstance.get(`${API_BASE_URL}/dashboard`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
+      // Use axiosInstance which should have interceptors
+      const response = await axiosInstance.get('/dashboard');
+      
       if (response.data && response.data.success) {
-        // Transform backend data to match frontend structure
         const backendData = response.data.data;
         
         setDashboardData({
-          user: backendData.user || { name: 'User', streak: 0 },
-          stats: backendData.stats || { totalInterviews: 0, avgScore: 0, bestScore: 0, improvement: 0 },
+          user: backendData.user || storedUser || { name: '', streak: 0 },
+          stats: backendData.stats || { 
+            totalInterviews: 0, 
+            avgScore: 0, 
+            bestScore: 0, 
+            improvement: 0 
+          },
           performanceData: backendData.performanceData || getDefaultPerformanceData(),
           pieData: backendData.pieData || getDefaultPieData(),
           categoryData: backendData.categoryData || getDefaultCategoryData(),
@@ -125,18 +130,39 @@ const Dashboard = () => {
     } catch (err) {
       console.error('Error fetching dashboard data:', err);
       setError('Failed to load dashboard data. Using sample data.');
-      // Fallback to default data
       setDashboardData(getDefaultData());
     } finally {
       setLoading(false);
     }
-  }, [API_BASE_URL, getDefaultData, getDefaultPerformanceData, getDefaultPieData, getDefaultCategoryData, getDefaultTips]);
+  }, [getDefaultData, getDefaultPerformanceData, getDefaultPieData, getDefaultCategoryData, getDefaultTips, getStoredUserData]);
+
+  // Logout handler
+  const handleLogout = useCallback(async () => {
+    try {
+      // Clear AuthContext storage
+      localStorage.removeItem('enc_token');
+      localStorage.removeItem('interviewAppUser');
+      
+      // Optional: Call backend logout endpoint
+      await axiosInstance.post('/logout').catch(err => {
+        console.warn('Logout API call failed:', err);
+      });
+      
+      // Redirect to login
+      navigate('/login', { replace: true });
+    } catch (err) {
+      console.error('Logout error:', err);
+      // Force clear and redirect
+      localStorage.removeItem('enc_token');
+      localStorage.removeItem('interviewAppUser');
+      navigate('/login', { replace: true });
+    }
+  }, [navigate]);
 
   // Fetch data on component mount
   useEffect(() => {
     fetchDashboardData();
     
-    // Optional: Set up polling for real-time updates
     const intervalId = setInterval(() => {
       fetchDashboardData();
     }, 300000); // Refresh every 5 minutes
@@ -172,12 +198,12 @@ const Dashboard = () => {
   const handleGenerateReport = async () => {
     try {
       const token = localStorage.getItem('token');
+      const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
       const response = await axiosInstance.post(`${API_BASE_URL}/reports/generate`, {}, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
 
       if (response.data.success) {
-        // Navigate to report page or show download link
         window.open(response.data.reportUrl, '_blank');
       }
     } catch (err) {
@@ -238,7 +264,7 @@ const Dashboard = () => {
       {/* Header Section */}
       <header className="dashboard-header">
         <div className="header-left">
-          <h1>🎯 Hey {user.name}! Ready to ace another interview?</h1>
+          <h1>🎯 Hey {user.name || 'there'}! Ready to ace another interview?</h1>
           <p className="subtitle">Let's track your progress and level up your interview skills! 💪</p>
           <button onClick={handleRefresh} className="refresh-btn" aria-label="Refresh dashboard data">
             🔄 Refresh Data
@@ -249,18 +275,26 @@ const Dashboard = () => {
             <span className="fire-icon">🔥</span>
             <span>🔥 {user.streak} Day Streak - Keep the fire burning!</span>
           </div>
-          <button 
-            className="primary-btn"
-            onClick={handleStartInterview}
-            aria-label="Start practice interview"
-          >
-            <span className="btn-icon">🚀</span>
-            Start Practice Interview
-          </button>
+          <div className="header-actions">
+            <button 
+              className="primary-btn"
+              onClick={handleStartInterview}
+              aria-label="Start practice interview"
+            >
+              <span className="btn-icon">🚀</span>
+              Start Practice Interview
+            </button>
+            <button 
+              className="logout-btn"
+              onClick={handleLogout}
+              aria-label="Logout"
+            >
+              🚪 Logout
+            </button>
+          </div>
         </div>
       </header>
 
-      {/* Top Stats Section */}
       <section className="stats-section" aria-label="Statistics overview">
         <StatBox 
           icon="📊"
@@ -288,7 +322,6 @@ const Dashboard = () => {
         />
       </section>
 
-      {/* Main Content Grid */}
       <main className="content-section">
         {/* Performance Chart Box */}
         <article className="content-box chart-box same-height">
@@ -351,40 +384,49 @@ const Dashboard = () => {
             </button>
           </div>
           <div className="interviews-container-same">
-            {recentInterviews.map((interview) => (
-              <div key={interview.id} className="interview-card-same">
-                <div className="interview-header-same">
-                  <div className="interview-type-same" style={{ 
-                    background: pieData.find(p => p.name === interview.type)?.color + '20',
-                    color: pieData.find(p => p.name === interview.type)?.color
-                  }}>
-                    {interview.type}
-                  </div>
-                  <div className="interview-date-same">{interview.date}</div>
-                </div>
-                <div className="interview-body-same">
-                  <div className="score-display-same">
-                    <div className="score-value-same">{interview.score}%</div>
-                    <div className="score-bar-same">
-                      <div 
-                        className="score-fill-same"
-                        style={{ 
-                          width: `${interview.score}%`,
-                          background: `linear-gradient(90deg, ${pieData.find(p => p.name === interview.type)?.color}, ${pieData.find(p => p.name === interview.type)?.color}80)`
-                        }}
-                      ></div>
+            {recentInterviews.length > 0 ? (
+              recentInterviews.map((interview) => (
+                <div key={interview.id} className="interview-card-same">
+                  <div className="interview-header-same">
+                    <div className="interview-type-same" style={{ 
+                      background: pieData.find(p => p.name === interview.type)?.color + '20',
+                      color: pieData.find(p => p.name === interview.type)?.color
+                    }}>
+                      {interview.type}
                     </div>
+                    <div className="interview-date-same">{interview.date}</div>
                   </div>
-                  <button 
-                    className="view-details-btn-same"
-                    onClick={() => handleViewInterview(interview.id)}
-                    aria-label={`View details for ${interview.type} interview`}
-                  >
-                    View
-                  </button>
+                  <div className="interview-body-same">
+                    <div className="score-display-same">
+                      <div className="score-value-same">{interview.score}%</div>
+                      <div className="score-bar-same">
+                        <div 
+                          className="score-fill-same"
+                          style={{ 
+                            width: `${interview.score}%`,
+                            background: `linear-gradient(90deg, ${pieData.find(p => p.name === interview.type)?.color}, ${pieData.find(p => p.name === interview.type)?.color}80)`
+                          }}
+                        ></div>
+                      </div>
+                    </div>
+                    <button 
+                      className="view-details-btn-same"
+                      onClick={() => handleViewInterview(interview.id)}
+                      aria-label={`View details for ${interview.type} interview`}
+                    >
+                      View
+                    </button>
+                  </div>
                 </div>
+              ))
+            ) : (
+              <div className="no-interviews">
+                <p>No interviews yet. Start your first practice!</p>
+                <button onClick={handleStartInterview} className="start-first-btn">
+                  🎤 Start First Interview
+                </button>
               </div>
-            ))}
+            )}
           </div>
         </article>
 
@@ -397,34 +439,40 @@ const Dashboard = () => {
             </h3>
           </div>
           <div className="categories-container-same">
-            {categoryData.map((category, index) => (
-              <div key={index} className="category-item-same">
-                <div className="category-header-same">
-                  <div className="category-name-same">
-                    <span 
-                      className="category-dot-same" 
-                      style={{ background: category.color }}
-                    ></span>
-                    {category.name}
+            {categoryData.length > 0 ? (
+              categoryData.map((category, index) => (
+                <div key={index} className="category-item-same">
+                  <div className="category-header-same">
+                    <div className="category-name-same">
+                      <span 
+                        className="category-dot-same" 
+                        style={{ background: category.color }}
+                      ></span>
+                      {category.name}
+                    </div>
+                    <div className="category-score-same">{category.score}%</div>
                   </div>
-                  <div className="category-score-same">{category.score}%</div>
+                  <div className="progress-container-same">
+                    <div 
+                      className="progress-fill-same"
+                      style={{ 
+                        width: `${category.score}%`,
+                        background: `linear-gradient(90deg, ${category.color}, ${category.color}80)`
+                      }}
+                    ></div>
+                  </div>
+                  <div className="category-footer-same">
+                    <span className="question-count-same">
+                      📝 {category.questions} questions
+                    </span>
+                  </div>
                 </div>
-                <div className="progress-container-same">
-                  <div 
-                    className="progress-fill-same"
-                    style={{ 
-                      width: `${category.score}%`,
-                      background: `linear-gradient(90deg, ${category.color}, ${category.color}80)`
-                    }}
-                  ></div>
-                </div>
-                <div className="category-footer-same">
-                  <span className="question-count-same">
-                    📝 {category.questions} questions
-                  </span>
-                </div>
+              ))
+            ) : (
+              <div className="no-category-data">
+                <p>Complete interviews to see category performance</p>
               </div>
-            ))}
+            )}
           </div>
         </article>
 

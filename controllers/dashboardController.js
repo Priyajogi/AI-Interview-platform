@@ -6,7 +6,7 @@ const Interview = require('../models/Interview');
 // @access  Private
 const getDashboardData = async (req, res) => {
   try {
-    const userId = req.user.id;
+    const userId = req.user.userid;
     
     // Get user data
     const user = await User.findById(userId);
@@ -365,50 +365,34 @@ function calculateSkillScore(interviews, skill) {
 function generateTips(user, interviews, categoryData) {
   const tips = [];
   
-  // Find weakest category
-  const weakestCategory = categoryData.reduce((weakest, current) => 
-    current.score < weakest.score ? current : weakest, 
-    { score: 100, name: '' }
-  );
+  // Tip 1: ALWAYS show technical skills tip
+  tips.push({
+    id: 1,
+    title: 'Technical Skills',
+    description: 'Focus on improving your technical questions. Practice DSA and System Design.',
+    icon: '🎯',
+    color: '#667eea'
+  });
 
-  if (weakestCategory.name && weakestCategory.score < 70) {
-    tips.push({
-      id: 1,
-      title: `${weakestCategory.name} Skills`,
-      description: `Focus on improving your ${weakestCategory.name.toLowerCase()} questions.`,
-      icon: '🎯',
-      color: '#667eea'
-    });
-  }
+  // Tip 2: ALWAYS show consistency tip
+  tips.push({
+    id: 2,
+    title: 'Consistency',
+    description: 'Try to practice daily to build a strong streak!',
+    icon: '📈',
+    color: '#4fd1c5'
+  });
 
-  // Check streak
-  if (user.streak < 3) {
-    tips.push({
-      id: 2,
-      title: 'Consistency',
-      description: 'Try to practice daily to build a strong streak!',
-      icon: '📈',
-      color: '#4fd1c5'
-    });
-  }
+  // Tip 3: ALWAYS show time management tip
+  tips.push({
+    id: 3,
+    title: 'Time Management',
+    description: 'Work on answering questions within 2-3 minutes.',
+    icon: '⏱️',
+    color: '#f6ad55'
+  });
 
-  // Check timing
-  const avgDuration = interviews.reduce((sum, i) => {
-    const [hours, minutes] = i.duration.split(':').map(Number);
-    return sum + (hours * 60 + minutes);
-  }, 0) / interviews.length;
-
-  if (avgDuration > 15) {
-    tips.push({
-      id: 3,
-      title: 'Time Management',
-      description: 'Work on answering questions more quickly.',
-      icon: '⏱️',
-      color: '#f6ad55'
-    });
-  }
-
-  // Always include a general tip
+  // Tip 4: ALWAYS show communication tip
   tips.push({
     id: 4,
     title: 'Communication',
@@ -419,6 +403,7 @@ function generateTips(user, interviews, categoryData) {
 
   return tips;
 }
+
 
 function generateTechnicalTips(subjectPerformance) {
   const tips = [];

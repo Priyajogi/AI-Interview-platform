@@ -1,4 +1,4 @@
-// server.js
+// server.js - Complete with Email Routes
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -10,9 +10,13 @@ const rateLimit = require('express-rate-limit');
 const mongoSanitize = require('express-mongo-sanitize');
 const emailService = require('./emailService'); // email service
 const Interview = require('./models/Interview');
-const User = require('./models/User');  // You need to create this file
-const Session = require('./models/Session');  // You need to create this file
+const User = require('./models/User');
+const Session = require('./models/Session');
+const Resume = require('./models/Resume'); // Resume model
 const app = express();
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 
 // Environment variables
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/ai_interview_db';
@@ -20,127 +24,142 @@ const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-this';
 const PORT = process.env.PORT || 5000;
 
-// =============== SECURITY MIDDLEWARE (BEFORE ROUTES) ===============
-// Basic Express middleware
-app.use(express.json()); // Parse JSON bodies
-
-// Security headers
+// =============== MIDDLEWARE ===============
+app.use(express.json());
 app.use(helmet());
-
-// CORS configuration
 app.use(cors({
     origin: CLIENT_URL,
     credentials: true
 }));
+app.use(mongoSanitize({ replaceWith: '_' }));
 
-// Custom security headers
-app.use((req, res, next) => {
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('X-XSS-Protection', '1; mode=block');
-  next();
-});
-
-// Input sanitization - prevents NoSQL injection
-app.use(mongoSanitize({
-  replaceWith: '_'
-}));
-
-// Rate limiting - prevent brute force attacks
+// Rate limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
-  message: 'Too many requests from this IP, please try again later.'
+    windowMs: 15 * 60 * 1000,
+    max: 100,
+    message: 'Too many requests from this IP'
 });
-app.use('/api/', limiter); // Apply to all API routes
+app.use('/api/', limiter);
 
-// Request logging (optional)
+// Request logging
 app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
-  next();
+    console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+    next();
 });
-// =============== END SECURITY MIDDLEWARE ===============
 
-// MongoDB Connection
+// =============== DATABASE CONNECTION ===============
 mongoose.connect(MONGO_URI, {
     useNewUrlParser: true,
     useUnifiedTopology: true,
 })
-.then(() => console.log('✅ MongoDB connected successfully'))
+.then(() => console.log('✅ MongoDB connected'))
 .catch((err) => {
-    console.error('❌ MongoDB connection error:', err);
+    console.error('❌ MongoDB error:', err);
     process.exit(1);
 });
 
-// =============== SCHEMAS ===============
-// Session Schema
-/*const sessionSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  token: { type: String, required: true },
-  userAgent: { type: String },
-  ipAddress: { type: String },
-  createdAt: { type: Date, default: Date.now, expires: '7d' } // Auto-delete after 7 days
-});
-
-const Session = mongoose.model('Session', sessionSchema);
-
-// User Schema
-const userSchema = new mongoose.Schema({
-    name: { type: String, required: true, trim: true },
-    username: { type: String, unique: true, trim: true, sparse: true, default: null },
-    email: { type: String, required: true, unique: true, lowercase: true, trim: true },
-    password: { type: String, required: true, minlength: 8 },
-    googleId: { type: String, sparse: true },
-    provider: { type: String, enum: ['local', 'google'], default: 'local' },
-    photo: { type: String, default: null },
-    isActive: { type: Boolean, default: true },
-    deactivatedAt: { type: Date },
-    createdAt: { type: Date, default: Date.now },
-    lastLogin: { type: Date },
-    interviewsCompleted: { type: Number, default: 0 },
-    averageScore: { type: Number, default: 0 }
-});
-
-// Hash password before saving
-userSchema.pre('save', async function(next) {
-    if (!this.isModified('password')) return next();
-    try {
-        const salt = await bcrypt.genSalt(10);
-        this.password = await bcrypt.hash(this.password, salt);
-        next();
-    } catch (error) {
-        next(error);
-    }
-});
-
-// Compare password method
-userSchema.methods.comparePassword = async function(candidatePassword) {
-    return await bcrypt.compare(candidatePassword, this.password);
-};
-
-const User = mongoose.model('User', userSchema);*/
-
 // =============== HELPER FUNCTIONS ===============
-// Password validation function
 function validatePassword(password) {
     if (password.length < 8) return 'Password must be at least 8 characters';
-    if (!/[A-Z]/.test(password)) return 'Password must contain at least one uppercase letter (A-Z)';
-    if (!/[a-z]/.test(password)) return 'Password must contain at least one lowercase letter (a-z)';
-    if (!/\d/.test(password)) return 'Password must contain at least one number (0-9)';
-    if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) return 'Password must contain at least one special character (!@#$%^&*)';
-    return null; // valid
+    if (!/[A-Z]/.test(password)) return 'Password must contain at least one uppercase letter';
+    if (!/[a-z]/.test(password)) return 'Password must contain at least one lowercase letter';
+    if (!/\d/.test(password)) return 'Password must contain at least one number';
+    if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) return 'Password must contain at least one special character';
+    return null;
 }
 
-// =============== ROUTES START HERE ===============
+// =============== AUTHENTICATION MIDDLEWARE ===============
+const authMiddleware = async (req, res, next) => {
+    try {
+        const authHeader = req.headers['authorization'];
+        const token = authHeader?.split(' ')[1];
+        
+        if (!token) {
+            return res.status(401).json({ 
+                success: false, 
+                error: 'No token provided' 
+            });
+        }
+
+        const decoded = jwt.verify(token, JWT_SECRET);
+        req.user = decoded;
+        next();
+    } catch (error) {
+        console.error('Auth error:', error);
+        if (error.name === 'TokenExpiredError') {
+            return res.status(401).json({ success: false, error: 'Token expired' });
+        }
+        if (error.name === 'JsonWebTokenError') {
+            return res.status(403).json({ success: false, error: 'Invalid token' });
+        }
+        res.status(500).json({ success: false, error: 'Authentication error' });
+    }
+};
+
+// =============== ESSENTIAL ROUTES ===============
 
 // Health Check
 app.get('/api/health', (req, res) => {
     res.json({ 
         status: 'OK', 
-        message: 'AI Interview Coach Backend is running',
+        message: 'AI Interview Coach Backend',
         database: mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected',
-        timestamp: new Date().toISOString()
+        ai: process.env.GEMINI_API_KEY ? 'Configured' : 'Not configured'
     });
+});
+
+// =============== AUTH ROUTES ===============
+// Login
+app.post('/api/login', async (req, res) => {
+    try {
+        const { identifier, password } = req.body;
+        if (!identifier || !password) {
+            return res.status(400).json({ success: false, error: 'Email/Username and password required' });
+        }
+
+        let user;
+        if (identifier.includes('@')) {
+            user = await User.findOne({ email: identifier.toLowerCase() });
+        } else {
+            user = await User.findOne({ username: identifier });
+        }
+
+        if (!user) return res.status(401).json({ success: false, error: 'Invalid credentials' });
+
+        const isPasswordValid = await user.comparePassword(password);
+        if (!isPasswordValid) return res.status(401).json({ success: false, error: 'Invalid credentials' });
+
+        user.lastLogin = new Date();
+        await user.save();
+
+        const token = jwt.sign({ userId: user._id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
+
+        // Create session
+        const session = new Session({
+            userId: user._id,
+            token: token,
+            userAgent: req.headers['user-agent'],
+            ipAddress: req.ip || req.connection.remoteAddress
+        });
+        await session.save();
+
+        res.json({
+            success: true,
+            message: 'Login successful',
+            token,
+            user: {
+                id: user._id,
+                name: user.name,
+                username: user.username,
+                email: user.email,
+                photo: user.photo,
+                createdAt: user.createdAt
+            }
+        });
+    } catch (error) {
+        console.error('Login error:', error);
+        res.status(500).json({ success: false, error: 'Server error' });
+    }
 });
 
 // Signup
@@ -153,8 +172,8 @@ app.post('/api/signup', async (req, res) => {
         }
 
         const trimmedUsername = username.trim();
-        if (trimmedUsername.length < 3 || trimmedUsername.length > 20 || !/^[a-zA-Z0-9_.-]+$/.test(trimmedUsername)) {
-            return res.status(400).json({ success: false, error: 'Invalid username format (3-20 chars, letters/numbers/dot/underscore/hyphen)' });
+        if (trimmedUsername.length < 3 || trimmedUsername.length > 20) {
+            return res.status(400).json({ success: false, error: 'Username must be 3-20 characters' });
         }
 
         const passwordError = validatePassword(password);
@@ -177,7 +196,7 @@ app.post('/api/signup', async (req, res) => {
 
         const token = jwt.sign({ userId: newUser._id, email: newUser.email }, JWT_SECRET, { expiresIn: '7d' });
 
-        // Create session for new user
+        // Create session
         const session = new Session({
             userId: newUser._id,
             token: token,
@@ -195,72 +214,46 @@ app.post('/api/signup', async (req, res) => {
                 name: newUser.name,
                 username: newUser.username,
                 email: newUser.email,
-                photo: newUser.photo,
-                provider: newUser.provider,
                 createdAt: newUser.createdAt
             }
         });
     } catch (error) {
-        console.error('❌ Signup error:', error);
-        res.status(500).json({ success: false, error: 'Server error. Please try again later.' });
+        console.error('Signup error:', error);
+        res.status(500).json({ success: false, error: 'Server error' });
     }
 });
 
-// Login (Email or Username)
-app.post('/api/login', async (req, res) => {
+// Profile
+app.get('/api/profile', authMiddleware, async (req, res) => {
     try {
-        const { identifier, password } = req.body;
-        if (!identifier || !password) return res.status(400).json({ success: false, error: 'Email/Username and password required' });
+        const user = await User.findById(req.user.userId).select('-password');
+        if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 
-        let user;
-        if (identifier.includes('@')) {
-            user = await User.findOne({ email: identifier.toLowerCase() });
-        } else {
-            user = await User.findOne({ username: identifier });
-        }
-
-        if (!user) return res.status(401).json({ success: false, error: 'Invalid email/username or password' });
-
-        const isPasswordValid = await user.comparePassword(password);
-        if (!isPasswordValid) return res.status(401).json({ success: false, error: 'Invalid email/username or password' });
-
-        user.lastLogin = new Date();
-        await user.save();
-
-        const token = jwt.sign({ userId: user._id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
-
-        // Create session for user
-        const session = new Session({
-            userId: user._id,
-            token: token,
-            userAgent: req.headers['user-agent'],
-            ipAddress: req.ip || req.connection.remoteAddress
-        });
-        await session.save();
-
-        res.json({
-            success: true,
-            message: 'Login successful',
-            token,
-            user: {
-                id: user._id,
-                name: user.name,
-                username: user.username,
-                email: user.email,
-                photo: user.photo,
-                provider: user.provider,
-                createdAt: user.createdAt,
-                lastLogin: user.lastLogin,
-                interviewsCompleted: user.interviewsCompleted,
-                averageScore: user.averageScore
-            }
-        });
+        res.json({ success: true, user });
     } catch (error) {
-        console.error('❌ Login error:', error);
-        res.status(500).json({ success: false, error: 'Server error. Please try again later.' });
+        console.error('Profile error:', error);
+        res.status(500).json({ success: false, error: 'Server error' });
     }
 });
 
+// Logout
+app.post('/api/logout', authMiddleware, async (req, res) => {
+    try {
+        const authHeader = req.headers['authorization'];
+        const token = authHeader?.split(' ')[1];
+        
+        if (token) {
+            await Session.deleteOne({ token });
+        }
+        
+        res.json({ success: true, message: 'Logged out successfully' });
+    } catch (error) {
+        console.error('Logout error:', error);
+        res.status(500).json({ success: false, error: 'Server error' });
+    }
+});
+
+// =============== EMAIL ROUTES ===============
 // Forgot Password
 app.post('/api/forgot-password', async (req, res) => {
     try {
@@ -283,7 +276,7 @@ app.post('/api/forgot-password', async (req, res) => {
         
         const resetLink = `${CLIENT_URL}/reset-password?token=${resetToken}`;
 
-        console.log(`📧 Attempting to send password reset to: ${user.email}`);
+        console.log(`📧 Sending password reset to: ${user.email}`);
         const emailResult = await emailService.sendPasswordReset(user.email, resetLink, user.name);
 
         if (!emailResult.success) {
@@ -405,291 +398,50 @@ app.post('/api/reset-password', async (req, res) => {
         });
     }
 });
-
-// Profile
-app.get('/api/profile', async (req, res) => {
-    try {
-        const authHeader = req.headers['authorization'];
-        const token = authHeader?.split(' ')[1];
-        if (!token) return res.status(401).json({ 
-            success: false, 
-            error: 'Access denied. No token provided.' 
-        });
-
-        const decoded = jwt.verify(token, JWT_SECRET);
-        const user = await User.findById(decoded.userId).select('-password');
-        if (!user) return res.status(404).json({ 
-            success: false, 
-            error: 'User not found' 
-        });
-
-        res.json({ success: true, user });
-    } catch (error) {
-        console.error('❌ Profile error:', error);
-        if (error.name === 'JsonWebTokenError') {
-            return res.status(403).json({ 
-                success: false, 
-                error: 'Invalid token' 
-            });
-        }
-        res.status(500).json({ 
-            success: false, 
-            error: 'Server error' 
-        });
+// Add to server.js
+app.post('/api/debug-token', async (req, res) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader?.split(' ')[1];
+    
+    console.log('🔍 Debug Token:', {
+      hasHeader: !!authHeader,
+      header: authHeader,
+      token: token ? `${token.substring(0, 20)}...` : 'No token',
+      tokenLength: token?.length
+    });
+    
+    if (!token) {
+      return res.json({ error: 'No token provided' });
     }
-});
-
-// Google Login
-app.post('/api/google-login', async (req, res) => {
+    
+    // Try to decode without verification first
+    const jwt = require('jsonwebtoken');
+    const decodedWithoutVerify = jwt.decode(token);
+    
+    console.log('📝 Decoded token (without verify):', decodedWithoutVerify);
+    
+    // Now try with verification
     try {
-        const { id, name, email, photo } = req.body;
-
-        if (!email) return res.status(400).json({ 
-            success: false, 
-            error: 'Email is required' 
-        });
-
-        // Check if user exists by email OR googleId
-        let user = await User.findOne({ 
-            $or: [
-                { email: email.toLowerCase() },
-                { googleId: id }
-            ] 
-        });
-
-        if (!user) {
-            user = await User.create({
-                name: name.trim(),
-                email: email.toLowerCase(),
-                googleId: id,
-                photo: photo,
-                provider: 'google',
-                createdAt: new Date()
-            });
-        } else {
-            // Update existing user with Google info if needed
-            if (!user.googleId) {
-                user.googleId = id;
-                user.provider = 'google';
-                if (photo) user.photo = photo;
-                await user.save();
-            }
-        }
-
-        // Generate JWT token
-        const token = jwt.sign({ 
-            userId: user._id, 
-            email: user.email 
-        }, JWT_SECRET, { expiresIn: '7d' });
-
-        // Create session for Google login
-        const session = new Session({
-            userId: user._id,
-            token: token,
-            userAgent: req.headers['user-agent'],
-            ipAddress: req.ip || req.connection.remoteAddress
-        });
-        await session.save();
-
-        res.json({
-            success: true,
-            message: 'Login successful',
-            token,
-            user: {
-                id: user._id,
-                name: user.name,
-                username: user.username,
-                email: user.email,
-                photo: user.photo,
-                provider: user.provider,
-                createdAt: user.createdAt,
-                lastLogin: user.lastLogin
-            }
-        });
-    } catch (error) {
-        console.error('❌ Google login error:', error);
-        res.status(500).json({ 
-            success: false, 
-            error: 'Server error' 
-        });
+      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key-change-this');
+      res.json({
+        valid: true,
+        decoded: decoded,
+        message: 'Token is valid'
+      });
+    } catch (verifyError) {
+      res.json({
+        valid: false,
+        error: verifyError.message,
+        decoded: decodedWithoutVerify
+      });
     }
+    
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
-
-// Refresh Token Endpoint
-app.post('/api/refresh-token', async (req, res) => {
-    try {
-        const authHeader = req.headers['authorization'];
-        const oldToken = authHeader?.split(' ')[1];
-        
-        if (!oldToken) return res.status(401).json({ 
-            success: false, 
-            error: 'No token provided' 
-        });
-
-        const decoded = jwt.verify(oldToken, JWT_SECRET);
-        const user = await User.findById(decoded.userId);
-        
-        if (!user) return res.status(404).json({ 
-            success: false, 
-            error: 'User not found' 
-        });
-
-        // Create new token
-        const newToken = jwt.sign(
-            { userId: user._id, email: user.email }, 
-            JWT_SECRET, 
-            { expiresIn: '7d' }
-        );
-
-        // Update session with new token
-        await Session.findOneAndUpdate(
-            { token: oldToken },
-            { token: newToken, createdAt: new Date() }
-        );
-
-        res.json({
-            success: true,
-            token: newToken,
-            user: {
-                id: user._id,
-                name: user.name,
-                email: user.email,
-                username: user.username
-            }
-        });
-    } catch (error) {
-        console.error('❌ Refresh token error:', error);
-        
-        if (error.name === 'TokenExpiredError') {
-            return res.status(401).json({ 
-                success: false, 
-                error: 'Token expired. Please login again.' 
-            });
-        }
-        
-        if (error.name === 'JsonWebTokenError') {
-            return res.status(403).json({ 
-                success: false, 
-                error: 'Invalid token' 
-            });
-        }
-        
-        res.status(500).json({ 
-            success: false, 
-            error: 'Server error' 
-        });
-    }
-});
-
-// Logout
-app.post('/api/logout', async (req, res) => {
-    try {
-        const authHeader = req.headers['authorization'];
-        const token = authHeader?.split(' ')[1];
-        
-        if (token) {
-            await Session.deleteOne({ token });
-        }
-        
-        res.json({ 
-            success: true, 
-            message: 'Logged out successfully' 
-        });
-    } catch (error) {
-        console.error('❌ Logout error:', error);
-        res.status(500).json({ 
-            success: false, 
-            error: 'Server error' 
-        });
-    }
-});
-
-// Deactivate account (soft delete)
-app.post('/api/account/deactivate', async (req, res) => {
-    try {
-        const authHeader = req.headers['authorization'];
-        const token = authHeader?.split(' ')[1];
-        if (!token) return res.status(401).json({ 
-            success: false, 
-            error: 'Access denied' 
-        });
-
-        const decoded = jwt.verify(token, JWT_SECRET);
-        const user = await User.findById(decoded.userId);
-        
-        if (!user) return res.status(404).json({ 
-            success: false, 
-            error: 'User not found' 
-        });
-
-        user.isActive = false;
-        user.deactivatedAt = new Date();
-        await user.save();
-        
-        // Delete all sessions for this user
-        await Session.deleteMany({ userId: user._id });
-
-        res.json({ 
-            success: true, 
-            message: 'Account deactivated successfully' 
-        });
-    } catch (error) {
-        console.error('❌ Deactivate account error:', error);
-        if (error.name === 'JsonWebTokenError') {
-            return res.status(403).json({ 
-                success: false, 
-                error: 'Invalid token' 
-            });
-        }
-        res.status(500).json({ 
-            success: false, 
-            error: 'Server error' 
-        });
-    }
-});
-
-// Delete account (hard delete)
-app.delete('/api/account', async (req, res) => {
-    try {
-        const authHeader = req.headers['authorization'];
-        const token = authHeader?.split(' ')[1];
-        if (!token) return res.status(401).json({ 
-            success: false, 
-            error: 'Access denied' 
-        });
-
-        const decoded = jwt.verify(token, JWT_SECRET);
-        const user = await User.findById(decoded.userId);
-        
-        if (!user) return res.status(404).json({ 
-            success: false, 
-            error: 'User not found' 
-        });
-
-        // Delete user and all related data
-        await User.deleteOne({ _id: user._id });
-        await Session.deleteMany({ userId: user._id });
-        
-        res.json({ 
-            success: true, 
-            message: 'Account deleted successfully' 
-        });
-    } catch (error) {
-        console.error('❌ Delete account error:', error);
-        if (error.name === 'JsonWebTokenError') {
-            return res.status(403).json({ 
-                success: false, 
-                error: 'Invalid token' 
-            });
-        }
-        res.status(500).json({ 
-            success: false, 
-            error: 'Server error' 
-        });
-    }
-});
-
-// Test Email Route (for development only)
+// Test Email Route
 app.get('/api/test-email', async (req, res) => {
     try {
         console.log('🧪 Testing email service...');
@@ -720,240 +472,472 @@ app.get('/api/test-email', async (req, res) => {
     }
 });
 
-app.get('/api/dashboard', async (req, res) => {
+
+// Test route
+app.get('/api/ai/test-public', async (req, res) => {
   try {
-    // Get token from header
-    const authHeader = req.headers['authorization'];
-    const token = authHeader?.split(' ')[1];
+    console.log('\n🧪 Testing Hugging Face AI...');
     
-    if (!token) {
-      return res.status(401).json({ success: false, error: 'No token provided' });
-    }
-
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    const userId = decoded.userId;
-
-    // Get user
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(404).json({ success: false, error: 'User not found' });
-    }
-
-    // Get user's interviews
-    const interviews = await Interview.find({ userId })
-      .sort({ date: -1 })
-      .limit(20);
-
-    // Calculate stats
-    const totalInterviews = interviews.length;
-    const totalScore = interviews.reduce((sum, interview) => sum + interview.score, 0);
-    const avgScore = totalInterviews > 0 ? Math.round(totalScore / totalInterviews) : 0;
-    const bestScore = Math.max(...interviews.map(i => i.score), 0);
+    const HuggingFaceService = require('./ai/HuggingFaceService');
+    const hf = new HuggingFaceService();
     
-    // Calculate improvement (last 3 vs previous 3 interviews)
-    const recentAvg = interviews.slice(0, 3).reduce((sum, i) => sum + i.score, 0) / 3;
-    const previousAvg = interviews.slice(3, 6).reduce((sum, i) => sum + i.score, 0) / 3;
-    const improvement = previousAvg > 0 ? Math.round(((recentAvg - previousAvg) / previousAvg) * 100) : 0;
-
-    // Prepare data for frontend
-    const response = {
+    const result = await hf.generateInterviewQuestions(
+      ['os', 'cn'],
+      'quick',
+      'test-user-id'
+    );
+    
+    res.json({
       success: true,
-      data: {
-        user: {
-          name: user.name,
-          streak: user.streak || 7
-        },
-        stats: {
-          totalInterviews,
-          avgScore,
-          bestScore,
-          improvement: improvement > 0 ? `+${improvement}%` : `${improvement}%`
-        },
-        performanceData: [
-          { name: 'W1', score: 65, color: '#667eea' },
-          { name: 'W2', score: 72, color: '#4fd1c5' },
-          { name: 'W3', score: 78, color: '#f6ad55' },
-          { name: 'W4', score: 82, color: '#fc8181' },
-          { name: 'W5', score: 85, color: '#9f7aea' },
-          { name: 'W6', score: 82, color: '#667eea' }
-        ],
-        pieData: [
-          { name: 'Technical', value: 35, color: '#667eea' },
-          { name: 'Behavioral', value: 30, color: '#4fd1c5' },
-          { name: 'HR', value: 20, color: '#f6ad55' },
-          { name: 'Scenario', value: 15, color: '#fc8181' }
-        ],
-        categoryData: [
-          { name: 'Technical', score: 75, questions: 25, color: '#667eea' },
-          { name: 'Behavioral', score: 82, questions: 18, color: '#4fd1c5' },
-          { name: 'HR', score: 88, questions: 15, color: '#f6ad55' }
-        ],
-        recentInterviews: interviews.slice(0, 3).map(interview => ({
-          id: interview._id,
-          type: interview.type,
-          score: interview.score,
-          date: formatDate(interview.date),
-          duration: interview.duration
-        })),
-        tips: [
-          { id: 1, title: 'Technical Skills', description: 'Focus on system design questions.', icon: '🎯', color: '#667eea' },
-          { id: 2, title: 'Communication', description: 'Practice speaking clearly and concisely.', icon: '💬', color: '#4fd1c5' },
-          { id: 3, title: 'Time Management', description: 'Work on answering within 2-3 minutes.', icon: '⏱️', color: '#f6ad55' },
-          { id: 4, title: 'Consistency', description: 'Maintain your streak!', icon: '📈', color: '#fc8181' }
-        ]
-      }
-    };
-
-    res.json(response);
+      result: result,
+      message: 'Hugging Face AI test completed'
+    });
+    
   } catch (error) {
-    console.error('Dashboard error:', error);
-    res.status(500).json({ success: false, error: 'Server error' });
+    console.error('Test error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
 });
+// Add this route BEFORE your protected /api/ai/generate route
+app.post('/api/ai/generate-test', async (req, res) => {
+  try {
+    const { subjects, interviewType } = req.body;
+    
+    console.log('🧪 AI Generate Test (No Auth):', { subjects, interviewType });
+    
+    if (!subjects || !Array.isArray(subjects) || subjects.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Please select at least one subject'
+      });
+    }
+    
+    // Load Groq service
+    const GroqQuestionService = require('./services/GroqQuestionService');
+    const groqService = new GroqQuestionService();
+    
+    // Generate questions WITHOUT user ID
+    const result = await groqService.generateQuestions(
+      subjects, 
+      interviewType || 'quick'
+    );
+    
+    console.log('📊 Test Generation Result:', {
+      success: result.success,
+      questionsCount: result.questions?.length,
+      isAI: result.isAI
+    });
+    
+    // Create a mock interview ID for testing
+    const mockInterviewId = 'test-' + Date.now();
+    
+    res.json({
+      success: true,
+      interviewId: mockInterviewId,
+      questions: result.questions,
+      isAI: result.isAI,
+      source: result.source,
+      message: `Test: Generated ${result.questions.length} questions`
+    });
+    
+  } catch (error) {
+    console.error('❌ Test generate error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to generate interview questions',
+      details: error.message
+    });
+  }
+});
+// Generate AI Interview (Main Route)
+// Replace your existing /api/ai/generate route with:
 
-// Helper function to format date
-function formatDate(date) {
-  const now = new Date();
-  const interviewDate = new Date(date);
-  const diffDays = Math.floor((now - interviewDate) / (1000 * 60 * 60 * 24));
-  
-  if (diffDays === 0) return 'Today';
-  if (diffDays === 1) return 'Yesterday';
-  if (diffDays < 7) return `${diffDays} days ago`;
-  
-  return interviewDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+app.post('/api/ai/generate', authMiddleware, async (req, res) => {
+  try {
+    const { subjects, interviewType } = req.body;
+    const userId = req.user.userId;
+    
+    console.log('🎯 AI Generate Request:', { subjects, interviewType, userId });
+    
+    if (!subjects || !Array.isArray(subjects) || subjects.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Please select at least one subject'
+      });
+    }
+    
+    // Validate interview type
+    const validTypes = ['quick', 'timed', 'mock'];
+    const finalType = validTypes.includes(interviewType) ? interviewType : 'quick';
+    
+    // Load Groq service
+    const GroqQuestionService = require('./services/GroqQuestionService');
+    const groqService = new GroqQuestionService();
+    
+    // Check if it's resume-based
+    let resumePath = null;
+    if (subjects.includes('resume')) {
+      // Find user's active resume
+      const resume = await Resume.findOne({ 
+        userId: userId, 
+        isActive: true 
+      });
+      
+      if (resume && fs.existsSync(resume.filePath)) {
+        resumePath = resume.filePath;
+        console.log(`📄 Using resume: ${resume.originalFilename}`);
+      } else {
+        console.log('⚠️ Resume selected but not found, using regular subjects');
+      }
+    }
+    
+    // Generate questions
+    const result = await groqService.generateQuestions(
+      subjects, 
+      finalType, 
+      userId, 
+      resumePath
+    );
+    
+    console.log('📊 Generation Result:', {
+      success: result.success,
+      isAI: result.isAI,
+      questionsCount: result.questions?.length,
+      source: result.source || 'subjects'
+    });
+    
+    // Create interview record
+    const interview = new Interview({
+      userId: userId,
+      type: result.source === 'resume' ? 'Resume Based AI' : 'AI Generated',
+      subjects: subjects,
+      questions: result.questions,
+      totalQuestions: result.questions.length,
+      status: 'generated',
+      metadata: {
+        isAI: result.isAI,
+        source: result.source,
+        model: result.model
+      }
+    });
+    
+    await interview.save();
+    
+    res.json({
+      success: true,
+      interviewId: interview._id,
+      questions: result.questions,
+      isAI: result.isAI,
+      source: result.source,
+      message: `Generated ${result.questions.length} ${result.source === 'resume' ? 'resume-based' : 'subject-based'} questions`
+    });
+    
+  } catch (error) {
+    console.error('❌ Generate error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to generate interview questions',
+      details: error.message
+    });
+  }
+});
+// Get AI Interview by ID
+app.get('/api/ai/interview/:id', authMiddleware, async (req, res) => {
+    try {
+        const interview = await Interview.findOne({
+            _id: req.params.id,
+            userId: req.user.userId
+        });
+        
+        if (!interview) {
+            return res.status(404).json({
+                success: false,
+                error: 'Interview not found'
+            });
+        }
+        
+        res.json({
+            success: true,
+            interview: {
+                id: interview._id,
+                type: interview.type,
+                subjects: interview.subjects,
+                questions: interview.questions,
+                totalQuestions: interview.totalQuestions,
+                date: interview.date,
+                status: interview.status
+            }
+        });
+        
+    } catch (error) {
+        console.error('Get interview error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to get interview'
+        });
+    }
+});
+
+// Save Interview Answers
+app.post('/api/ai/interview/:id/answers', authMiddleware, async (req, res) => {
+    try {
+        const { answers, score, feedback } = req.body;
+        const interviewId = req.params.id;
+        const userId = req.user.userId;
+        
+        const interview = await Interview.findOne({
+            _id: interviewId,
+            userId: userId
+        });
+        
+        if (!interview) {
+            return res.status(404).json({
+                success: false,
+                error: 'Interview not found'
+            });
+        }
+        
+        // Update interview with answers
+        interview.answers = answers || {};
+        if (score !== undefined) interview.score = score;
+        if (feedback) interview.feedback = feedback;
+        interview.status = 'completed';
+        
+        await interview.save();
+        
+        // Update user stats
+        await User.findByIdAndUpdate(userId, {
+            $inc: { interviewsCompleted: 1 }
+        });
+        
+        res.json({
+            success: true,
+            message: 'Interview answers saved successfully'
+        });
+        
+    } catch (error) {
+        console.error('Save answers error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to save answers'
+        });
+    }
+});
+
+// Get User's AI Interviews
+app.get('/api/ai/interviews', authMiddleware, async (req, res) => {
+    try {
+        const interviews = await Interview.find({
+            userId: req.user.userId
+        })
+        .sort({ date: -1 })
+        .limit(20);
+        
+        res.json({
+            success: true,
+            interviews: interviews.map(interview => ({
+                id: interview._id,
+                type: interview.type,
+                subjects: interview.subjects,
+                questionsCount: interview.questions.length,
+                score: interview.score,
+                date: interview.date,
+                status: interview.status
+            }))
+        });
+        
+    } catch (error) {
+        console.error('Get interviews error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to get interviews'
+        });
+    }
+});
+
+// =============== RESUME UPLOAD ROUTES ===============
+
+
+// Configure storage for resume files
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        const uploadDir = 'uploads/resumes/';
+        if (!fs.existsSync(uploadDir)) {
+            fs.mkdirSync(uploadDir, { recursive: true });
+        }
+        cb(null, uploadDir);
+    },
+    filename: (req, file, cb) => {
+        const userId = req.user ? req.user.userId : 'guest';
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, `resume-${userId}-${uniqueSuffix}${path.extname(file.originalname)}`);
+    }
+});
+
+// File filter
+const fileFilter = (req, file, cb) => {
+    const allowedTypes = ['.pdf', '.doc', '.docx', '.txt', '.rtf'];
+    const ext = path.extname(file.originalname).toLowerCase();
+    
+    if (allowedTypes.includes(ext)) {
+        cb(null, true);
+    } else {
+        cb(new Error(`Invalid file type. Allowed: ${allowedTypes.join(', ')}`), false);
+    }
+};
+
+// Initialize multer
+const upload = multer({
+    storage: storage,
+    fileFilter: fileFilter,
+    limits: { fileSize: 5 * 1024 * 1024 } // 5MB max
+});
+
+// File size formatting helper
+function formatFileSize(bytes) {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
-// =============== INTERVIEW API ===============
+// Upload Resume
+app.post('/api/resume/upload', authMiddleware, upload.single('resume'), async (req, res) => {
+    try {
+        console.log('📁 Resume upload for user:', req.user.userId);
+        
+        if (!req.file) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'No file uploaded or invalid file type' 
+            });
+        }
 
-// Save Interview Result
-app.post('/api/interview/save', async (req, res) => {
-  try {
-    // Get token from header
-    const authHeader = req.headers['authorization'];
-    const token = authHeader?.split(' ')[1];
-    
-    if (!token) {
-      return res.status(401).json({ success: false, error: 'No token provided' });
+        // Deactivate any existing active resume
+        await Resume.updateMany(
+            { userId: req.user.userId, isActive: true },
+            { $set: { isActive: false } }
+        );
+
+        // Save new resume to database
+        const resume = new Resume({
+            userId: req.user.userId,
+            originalFilename: req.file.originalname,
+            storedFilename: req.file.filename,
+            filePath: req.file.path,
+            fileSize: req.file.size,
+            fileType: path.extname(req.file.originalname).toLowerCase()
+        });
+
+        await resume.save();
+
+        res.json({
+            success: true,
+            message: 'Resume uploaded successfully',
+            resume: {
+                id: resume._id,
+                originalName: resume.originalFilename,
+                fileSize: formatFileSize(resume.fileSize),
+                fileType: resume.fileType,
+                uploadDate: resume.uploadDate,
+                downloadUrl: `/api/resume/download/${resume._id}`
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Resume upload error:', error);
+        
+        // Clean up uploaded file if error
+        if (req.file && fs.existsSync(req.file.path)) {
+            try {
+                fs.unlinkSync(req.file.path);
+            } catch (unlinkError) {
+                console.error('Failed to clean up file:', unlinkError);
+            }
+        }
+        
+        res.status(500).json({ 
+            success: false, 
+            error: 'Failed to upload resume' 
+        });
     }
-
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    const userId = decoded.userId;
-
-    const { type, subjects, score, totalQuestions, correctAnswers, duration, feedback } = req.body;
-
-    // Create new interview
-    const interview = new Interview({
-      userId,
-      type: type || 'Technical',
-      subjects: subjects || ['Technical'],
-      score: score || 75,
-      totalQuestions: totalQuestions || 10,
-      correctAnswers: correctAnswers || 7,
-      duration: duration || '12:45',
-      feedback: feedback || 'Good performance!'
-    });
-
-    await interview.save();
-
-    // Update user stats
-    await User.findByIdAndUpdate(userId, {
-      $inc: { interviewsCompleted: 1 },
-      $set: { lastLogin: new Date() }
-    });
-
-    res.json({
-      success: true,
-      message: 'Interview saved successfully',
-      interviewId: interview._id
-    });
-  } catch (error) {
-    console.error('Save interview error:', error);
-    res.status(500).json({ success: false, error: 'Failed to save interview' });
-  }
 });
 
-// Get Interview History
-app.get('/api/interview/history', async (req, res) => {
-  try {
-    // Get token from header
-    const authHeader = req.headers['authorization'];
-    const token = authHeader?.split(' ')[1];
-    
-    if (!token) {
-      return res.status(401).json({ success: false, error: 'No token provided' });
+// Get current active resume
+app.get('/api/resume/current', authMiddleware, async (req, res) => {
+    try {
+        const resume = await Resume.findOne({ 
+            userId: req.user.userId, 
+            isActive: true 
+        });
+
+        if (!resume) {
+            return res.json({
+                success: true,
+                hasResume: false,
+                message: 'No resume uploaded yet'
+            });
+        }
+
+        res.json({
+            success: true,
+            hasResume: true,
+            resume: {
+                id: resume._id,
+                originalName: resume.originalFilename,
+                fileSize: formatFileSize(resume.fileSize),
+                fileType: resume.fileType,
+                uploadDate: resume.uploadDate,
+                downloadUrl: `/api/resume/download/${resume._id}`
+            }
+        });
+    } catch (error) {
+        console.error('❌ Get resume error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Failed to get resume info' 
+        });
     }
-
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    const userId = decoded.userId;
-
-    const interviews = await Interview.find({ userId })
-      .sort({ date: -1 })
-      .limit(50);
-
-    res.json({
-      success: true,
-      interviews: interviews.map(interview => ({
-        id: interview._id,
-        type: interview.type,
-        subjects: interview.subjects,
-        score: interview.score,
-        date: interview.date,
-        duration: interview.duration,
-        feedback: interview.feedback
-      }))
-    });
-  } catch (error) {
-    console.error('Get history error:', error);
-    res.status(500).json({ success: false, error: 'Failed to get interview history' });
-  }
 });
 
-// Get Single Interview
-app.get('/api/interview/:id', async (req, res) => {
-  try {
-    // Get token from header
-    const authHeader = req.headers['authorization'];
-    const token = authHeader?.split(' ')[1];
-    
-    if (!token) {
-      return res.status(401).json({ success: false, error: 'No token provided' });
+// Download resume
+app.get('/api/resume/download/:id', authMiddleware, async (req, res) => {
+    try {
+        const resume = await Resume.findOne({ 
+            _id: req.params.id, 
+            userId: req.user.userId 
+        });
+
+        if (!resume) {
+            return res.status(404).json({ 
+                success: false, 
+                error: 'Resume not found' 
+            });
+        }
+
+        if (!fs.existsSync(resume.filePath)) {
+            return res.status(404).json({ 
+                success: false, 
+                error: 'Resume file not found on server' 
+            });
+        }
+
+        res.download(resume.filePath, resume.originalFilename);
+    } catch (error) {
+        console.error('❌ Download resume error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Failed to download resume' 
+        });
     }
-
-    const decoded = jwt.verify(token, JWT_SECRET);
-    const userId = decoded.userId;
-
-    const interview = await Interview.findOne({ _id: req.params.id, userId });
-    
-    if (!interview) {
-      return res.status(404).json({ success: false, error: 'Interview not found' });
-    }
-
-    res.json({
-      success: true,
-      interview: {
-        id: interview._id,
-        type: interview.type,
-        subjects: interview.subjects,
-        score: interview.score,
-        totalQuestions: interview.totalQuestions,
-        correctAnswers: interview.correctAnswers,
-        date: interview.date,
-        duration: interview.duration,
-        feedback: interview.feedback
-      }
-    });
-  } catch (error) {
-    console.error('Get interview error:', error);
-    res.status(500).json({ success: false, error: 'Failed to get interview' });
-  }
 });
 
-// =============== ERROR HANDLING (AFTER ALL ROUTES) ===============
-// 404 handler for unmatched routes
+// =============== ERROR HANDLING ===============
+// 404 handler
 app.use('*', (req, res) => {
     res.status(404).json({ 
         success: false, 
@@ -964,16 +948,31 @@ app.use('*', (req, res) => {
 // Global error handler
 app.use((err, req, res, next) => {
     console.error('❌ Unhandled error:', err);
+    
+    // Handle multer errors
+    if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+            return res.status(400).json({
+                success: false,
+                error: 'File too large. Maximum size is 5MB.'
+            });
+        }
+        return res.status(400).json({
+            success: false,
+            error: `File upload error: ${err.message}`
+        });
+    }
+    
     res.status(500).json({ 
         success: false, 
         error: 'Internal server error' 
     });
 });
 
-// Start Server
+// =============== START SERVER ===============
 app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`🌐 API available at ${CLIENT_URL}`);
-    console.log(`🔒 Security middleware enabled`);
+    console.log(`🌐 API: http://localhost:${PORT}`);
     console.log(`📧 Email service: ${process.env.GMAIL_USER ? 'Configured' : 'Not configured'}`);
+    console.log(`🤖 AI service: ${process.env.GEMINI_API_KEY ? 'Configured' : 'Not configured'}`);
 });

@@ -13,21 +13,28 @@ export const AuthProvider = ({ children }) => {
 
   const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
-  // Secure storage utilities - FIXED: Moved inside useCallback
+  // Secure storage utilities
   const getSecureStorage = useCallback(() => ({
     setToken: (newToken) => {
       try {
+        // Store both encrypted and plain versions for compatibility
         const encrypted = btoa(newToken);
         localStorage.setItem('enc_token', encrypted);
+        localStorage.setItem('token', newToken); // For backward compatibility
       } catch (error) {
         console.error('Token storage error:', error);
       }
     },
     getToken: () => {
       try {
+        // Try encrypted token first
         const encrypted = localStorage.getItem('enc_token');
-        return encrypted ? atob(encrypted) : null;
+        if (encrypted) return atob(encrypted);
+        
+        // Fallback to plain token (for backward compatibility)
+        return localStorage.getItem('token');
       } catch (error) {
+        console.error('Token retrieval error:', error);
         return null;
       }
     },
@@ -44,11 +51,23 @@ export const AuthProvider = ({ children }) => {
     },
     clear: () => {
       localStorage.removeItem('enc_token');
+      localStorage.removeItem('token');
       localStorage.removeItem('interviewAppUser');
+      localStorage.removeItem('rememberedIdentifier');
+      localStorage.removeItem('rememberMe');
     }
   }), []);
 
-  // Load user from storage on initial load - FIXED: Added getSecureStorage to dependencies
+  // Get authentication headers for API calls
+  const getAuthHeaders = useCallback(() => {
+    const token = getSecureStorage().getToken();
+    return token ? { 
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    } : {};
+  }, [getSecureStorage]);
+
+  // Load user from storage on initial load
   useEffect(() => {
     const loadUserFromStorage = () => {
       try {
@@ -65,6 +84,8 @@ export const AuthProvider = ({ children }) => {
               setUser(savedUser);
               setToken(savedToken);
             } else {
+              // Token expired, clear storage
+              console.log('Token expired, clearing storage');
               secureStorage.clear();
             }
           } catch (error) {
@@ -86,25 +107,33 @@ export const AuthProvider = ({ children }) => {
   // Logout function
   const logout = useCallback(async () => {
     try {
+      const secureStorage = getSecureStorage();
+      const currentToken = secureStorage.getToken();
+      
       // Call logout endpoint on server
-      if (token) {
+      if (currentToken) {
         await fetch(`${API_URL}/logout`, {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${token}`,
+            'Authorization': `Bearer ${currentToken}`,
             'Content-Type': 'application/json'
           }
         }).catch(err => console.error('Logout API error (non-critical):', err));
       }
+    } catch (error) {
+      console.error('Logout error:', error);
     } finally {
       // Clear local storage and state regardless
       getSecureStorage().clear();
       setUser(null);
       setToken(null);
+      
+      // Redirect to login page
+      window.location.href = '/login';
     }
-  }, [token, API_URL, getSecureStorage]);
+  }, [API_URL, getSecureStorage]);
 
-  // Token refresh function - FIXED: Added logout and getSecureStorage dependencies
+  // Token refresh function
   const refreshToken = useCallback(async () => {
     if (refreshing || !token) return null;
     
@@ -112,10 +141,7 @@ export const AuthProvider = ({ children }) => {
       setRefreshing(true);
       const res = await fetch(`${API_URL}/refresh-token`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
+        headers: getAuthHeaders(),
       });
       
       if (!res.ok) throw new Error('Refresh failed');
@@ -135,14 +161,12 @@ export const AuthProvider = ({ children }) => {
     } catch (error) {
       console.error('❌ Token refresh failed:', error);
       // If refresh fails, logout the user
-      if (error.message.includes('expired') || error.message.includes('invalid')) {
-        logout();
-      }
+      logout();
     } finally {
       setRefreshing(false);
     }
     return null;
-  }, [token, refreshing, API_URL, getSecureStorage, logout]);
+  }, [token, refreshing, API_URL, getAuthHeaders, getSecureStorage, logout]);
 
   // Check token expiration periodically
   useEffect(() => {
@@ -248,6 +272,25 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  // Check if user is authenticated
+  const isAuthenticated = useCallback(() => {
+    try {
+      const token = getSecureStorage().getToken();
+      if (!token) return false;
+      
+      const decoded = jwtDecode(token);
+      const currentTime = Date.now() / 1000;
+      return decoded.exp > currentTime;
+    } catch (error) {
+      return false;
+    }
+  }, [getSecureStorage]);
+
+  // Get current token
+  const getCurrentToken = useCallback(() => {
+    return getSecureStorage().getToken();
+  }, [getSecureStorage]);
+
   return (
     <AuthContext.Provider value={{
       user,
@@ -257,9 +300,11 @@ export const AuthProvider = ({ children }) => {
       googleLogin,
       logout,
       refreshToken,
+      getAuthHeaders,
+      getCurrentToken,
+      isAuthenticated: isAuthenticated(),
       loading,
-      refreshing,
-      isAuthenticated: !!token
+      refreshing
     }}>
       {children}
     </AuthContext.Provider>

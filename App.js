@@ -45,41 +45,63 @@ function App() {
             <Layout>
               <div className="App">
                 <Routes>
-                  {/* Public Routes */}
+                  {/* ========== PUBLIC ROUTES ========== */}
                   <Route path="/" element={<LandingPage />} />
                   <Route path="/login" element={<LoginPage />} />
                   <Route path="/signup" element={<SignupPage />} />
                   <Route path="/forgot-password" element={<ForgotPassword />} />
                   <Route path="/reset-password" element={<ResetPassword />} />
                   
-                  {/* Protected Routes */}
+                  {/* ========== PROTECTED ROUTES ========== */}
                   <Route path="/dashboard" element={
                     <ProtectedRoute>
                       <Dashboard />
                     </ProtectedRoute>
                   } />
                   
-                  {/* Interview Flow Routes */}
+                  {/* ========== INTERVIEW FLOW ========== */}
+                  {/* 1. Interview Selection Page (Subject & Resume Selection) */}
                   <Route path="/interview" element={
                     <ProtectedRoute>
                       <Interview />
                     </ProtectedRoute>
                   } />
                   
-                  <Route path="/interview/:categoryId" element={
+                  {/* 2. AI Interview Session Page (Handles ALL interviews - both old and new) */}
+                  <Route path="/interview/:sessionId" element={
                     <ProtectedRoute>
                       <InterviewPage />
                     </ProtectedRoute>
                   } />
                   
-                  {/* Keep old interview route for compatibility */}
-                  <Route path="/quick-interview" element={
+                  {/* 3. Compatibility route - Redirect old category-based interviews to AI system */}
+                  <Route path="/interview-category/:categoryId" element={
                     <ProtectedRoute>
-                      <Interview />
+                      <Navigate to="/interview" replace />
                     </ProtectedRoute>
                   } />
                   
-                  {/* Default redirect */}
+                  {/* ========== COMPATIBILITY ROUTES ========== */}
+                  {/* Redirect old routes to new system */}
+                  <Route path="/quick-interview" element={
+                    <ProtectedRoute>
+                      <Navigate to="/interview" replace />
+                    </ProtectedRoute>
+                  } />
+                  
+                  <Route path="/mock-interview" element={
+                    <ProtectedRoute>
+                      <Navigate to="/interview" replace />
+                    </ProtectedRoute>
+                  } />
+                  
+                  <Route path="/timer-test" element={
+                    <ProtectedRoute>
+                      <Navigate to="/interview" replace />
+                    </ProtectedRoute>
+                  } />
+                  
+                  {/* ========== DEFAULT REDIRECT ========== */}
                   <Route path="*" element={<Navigate to="/" />} />
                 </Routes>
               </div>
